@@ -17,8 +17,9 @@ class Settings(BaseSettings):
     app_env: str = Field(default="local", validation_alias="APP_ENV")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
-    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
+    # LLM Provider settings (Gemini)
+    gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-1.5-flash", validation_alias="GEMINI_MODEL")
 
     langsmith_api_key: str | None = Field(default=None, validation_alias="LANGSMITH_API_KEY")
     langsmith_project: str = Field(

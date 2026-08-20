@@ -1,27 +1,147 @@
 """Benchmark report rendering."""
 
+from datetime import datetime
+
 from multi_agent_research_lab.core.schemas import BenchmarkMetrics
+from multi_agent_research_lab.core.state import ResearchState
 
 
-def render_markdown_report(metrics: list[BenchmarkMetrics]) -> str:
-    """Render benchmark metrics to markdown.
+def _fmt_cost(m: BenchmarkMetrics | None) -> str:
+    """Format cost."""
+    if m is None or m.estimated_cost_usd is None:
+        return "N/A"
+    return f"${m.estimated_cost_usd:.6f}"
 
-    TODO(student): Add richer analysis, examples, screenshots, and trace links.
-    """
+
+def _fmt_pct(v: float | None) -> str:
+    """Format percentage."""
+    if v is None:
+        return "N/A"
+    return f"{v:.0%}"
+
+
+def _fmt_latency(m: BenchmarkMetrics | None) -> str:
+    """Format latency."""
+    if m is None:
+        return "N/A"
+    return f"{m.latency_seconds:.2f}s"
+
+
+def _get_metric_val(m: BenchmarkMetrics | None, attr: str) -> float | None:
+    """Get metric attribute safely."""
+    if m is None:
+        return None
+    return getattr(m, attr, None)
+
+
+def render_markdown_report(
+    metrics: list[BenchmarkMetrics],
+    query: str,
+    single_state: ResearchState | None = None,
+    multi_state: ResearchState | None = None,
+) -> str:
+    """Render benchmark metrics to markdown report."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Find single and multi agent metrics
+    single_m: BenchmarkMetrics | None = None
+    multi_m: BenchmarkMetrics | None = None
+    for m in metrics:
+        if "single" in m.run_name.lower():
+            single_m = m
+        elif "multi" in m.run_name.lower():
+            multi_m = m
+
+    # Format summary values
+    s_latency = _fmt_latency(single_m)
+    m_latency = _fmt_latency(multi_m)
+    s_cost = _fmt_cost(single_m)
+    m_cost = _fmt_cost(multi_m)
+    s_cite = _fmt_pct(_get_metric_val(single_m, "citation_coverage"))
+    m_cite = _fmt_pct(_get_metric_val(multi_m, "citation_coverage"))
+    s_fail = _fmt_pct(_get_metric_val(single_m, "failure_rate"))
+    m_fail = _fmt_pct(_get_metric_val(multi_m, "failure_rate"))
 
     lines = [
         "# Benchmark Report",
         "",
-        "| Run | Latency (s) | Cost (USD) | Quality | Citation cov. | Failure rate | Notes |",
-        "|---|---:|---:|---:|---:|---:|---|",
+        f"**Generated**: {timestamp}",
+        "",
+        "## Query",
+        "",
+        f"```\n{query}\n```",
+        "",
+        "## Results Summary",
+        "",
+        "| Metric | Single-Agent | Multi-Agent |",
+        "|--------|-------------:|------------:|",
+        f"| Latency | {s_latency} | {m_latency} |",
+        f"| Est. Cost | {s_cost} | {m_cost} |",
+        f"| Citation | {s_cite} | {m_cite} |",
+        f"| Failure | {s_fail} | {m_fail} |",
     ]
+
+    # Token Usage
+    if single_state and multi_state:
+        s_tokens = _count_tokens(single_state)
+        m_tokens = _count_tokens(multi_state)
+        lines.append(f"| Input Tokens | {s_tokens['input']} | {m_tokens['input']} |")
+        lines.append(f"| Output Tokens | {s_tokens['output']} | {m_tokens['output']} |")
+
+    # Detailed metrics
+    header = "| Run | Latency | Cost | Citation | Failure | Notes |"
+    sep = "|-----|---:|---:|---:|---:|---|"
+    lines.extend(["", "## Detailed Metrics", "", header, sep])
     for item in metrics:
-        cost = "" if item.estimated_cost_usd is None else f"{item.estimated_cost_usd:.4f}"
-        quality = "" if item.quality_score is None else f"{item.quality_score:.1f}"
-        citation = "" if item.citation_coverage is None else f"{item.citation_coverage:.0%}"
-        failure = "" if item.failure_rate is None else f"{item.failure_rate:.0%}"
-        lines.append(
-            f"| {item.run_name} | {item.latency_seconds:.2f} | {cost} | {quality} "
-            f"| {citation} | {failure} | {item.notes} |"
-        )
+        cost = f"{item.estimated_cost_usd:.6f}" if item.estimated_cost_usd else "-"
+        citation = _fmt_pct(item.citation_coverage)
+        failure = _fmt_pct(item.failure_rate)
+        notes_short = (item.notes or "-")[:50]
+        name = item.run_name
+        lat = f"{item.latency_seconds:.2f}s"
+        lines.append(f"| {name} | {lat} | {cost} | {citation} | {failure} | {notes_short} |")
+
+    # Failure analysis
+    lines.extend(["", "## Failure Mode Analysis", ""])
+    for item in metrics:
+        if item.failure_rate and item.failure_rate > 0:
+            lines.extend([f"### {item.run_name}", "", f"```\n{item.notes}\n```", ""])
+            if "429" in item.notes or "RESOURCE_EXHAUSTED" in item.notes:
+                lines.extend(
+                    [
+                        "**Detection**: Gemini API 429 (rate limit or quota exceeded)",
+                        "",
+                        "**Handling**: Retried 3x with exponential backoff (tenacity)",
+                        "",
+                        "**Impact**: Agent recorded error, workflow continued until max_iterations",
+                        "",
+                        "**Mitigation**: Wait for quota reset or use paid tier",
+                        "",
+                    ]
+                )
+
+    # Trace summary
+    if multi_state and multi_state.trace:
+        lines.extend(["## Trace Summary", "", f"Total trace events: {len(multi_state.trace)}", ""])
+        lines.append("| Agent | Duration | Status |")
+        lines.append("|-------|-------------:|--------|")
+        for event in multi_state.trace:
+            payload = event.get("payload", {})
+            duration = payload.get("duration_seconds", "N/A")
+            status = payload.get("status", "unknown")
+            name = event.get("name", "unknown")
+            lines.append(f"| {name} | {duration:.3f} | {status} |")
+
+    lines.extend(["", "---", "*Generated by Multi-Agent Research Lab*"])
     return "\n".join(lines) + "\n"
+
+
+def _count_tokens(state: ResearchState) -> dict[str, int]:
+    """Count tokens from agent results."""
+    input_tokens = 0
+    output_tokens = 0
+    for result in state.agent_results:
+        if result.metadata:
+            input_tokens += result.metadata.get("input_tokens", 0) or 0
+            output_tokens += result.metadata.get("output_tokens", 0) or 0
+    return {"input": input_tokens, "output": output_tokens}
